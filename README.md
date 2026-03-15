@@ -71,6 +71,26 @@ python -m diffwave /path/to/model/dir /path/to/dir/containing/wavs
 tensorboard --logdir /path/to/model/dir --bind_all
 ```
 
+#### Optional global label conditioning
+You can optionally provide per-example global label vectors from `.npy` files.
+Each label file is loaded per `.wav` sample and projected in every residual block.
+
+Enable it during training:
+
+```
+python -m diffwave /path/to/model/dir /path/to/wavs \
+	--global_conditioning \
+	--global_conditioning_suffix .label.npy
+```
+
+File matching rules for each `audio.wav`:
+- Default (same directory as audio): `audio.wav.label.npy` or `audio.label.npy`
+- With `--global_conditioning_dir /path/to/labels`: relative-path and basename fallbacks are both supported.
+
+Label dimension:
+- inferred automatically from the first matched `.npy` file
+- or set explicitly with `--global_condition_dim <int>`
+
 You should expect to hear intelligible (but noisy) speech by ~8k steps (~1.5h on a 2080 Ti).
 
 #### Multi-GPU training

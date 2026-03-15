@@ -24,44 +24,121 @@ from glob import glob
 from torch.utils.data.distributed import DistributedSampler
 
 
+def _build_file_index(paths):
+  files = []
+  for path in paths:
+    wavs = glob(f'{path}/**/*.wav', recursive=True)
+    files += [(filename, path) for filename in wavs]
+  return files
+
+
+def _resolve_global_condition_path(audio_filename, data_root, params):
+  suffix = params.global_conditioning_suffix
+  if not suffix.endswith('.npy'):
+    raise ValueError(f'global_conditioning_suffix must end with .npy, got {suffix}')
+
+  # Default: sidecar label next to the audio file.
+  if not params.global_conditioning_dir:
+    sidecar = f'{audio_filename}{suffix}'
+    if os.path.exists(sidecar):
+      return sidecar
+    stem_sidecar = f'{os.path.splitext(audio_filename)[0]}{suffix}'
+    if os.path.exists(stem_sidecar):
+      return stem_sidecar
+    return None
+
+  rel = os.path.relpath(audio_filename, data_root)
+  rel_no_ext = os.path.splitext(rel)[0]
+  root = params.global_conditioning_dir
+
+  candidates = [
+      os.path.join(root, f'{rel}{suffix}'),
+      os.path.join(root, f'{rel_no_ext}{suffix}'),
+      os.path.join(root, f'{os.path.basename(audio_filename)}{suffix}'),
+      os.path.join(root, f'{os.path.splitext(os.path.basename(audio_filename))[0]}{suffix}'),
+  ]
+  for candidate in candidates:
+    if os.path.exists(candidate):
+      return candidate
+  return None
+
+
+def _load_global_condition(audio_filename, data_root, params):
+  if not params.global_conditioning:
+    return None
+
+  label_path = _resolve_global_condition_path(audio_filename, data_root, params)
+  if label_path is None:
+    raise FileNotFoundError(f'Global label file not found for {audio_filename}')
+
+  label = np.load(label_path)
+  label = np.asarray(label, dtype=np.float32).reshape(-1)
+  expected_dim = params.global_condition_dim
+  if expected_dim is not None and label.shape[0] != expected_dim:
+    raise ValueError(
+        f'Expected global label dim {expected_dim}, got {label.shape[0]} from {label_path}')
+  return label
+
+
+def _infer_global_condition_dim(file_index, params):
+  if not params.global_conditioning:
+    return
+  if params.global_condition_dim is not None:
+    if params.global_condition_dim <= 0:
+      raise ValueError(f'global_condition_dim must be > 0, got {params.global_condition_dim}')
+    return
+
+  for audio_filename, data_root in file_index:
+    label_path = _resolve_global_condition_path(audio_filename, data_root, params)
+    if label_path is None:
+      continue
+    label = np.load(label_path)
+    label = np.asarray(label).reshape(-1)
+    if label.shape[0] <= 0:
+      raise ValueError(f'Global label file is empty: {label_path}')
+    params.global_condition_dim = int(label.shape[0])
+    return
+
+  raise FileNotFoundError('Unable to infer global_condition_dim: no label .npy files found')
+
+
 class ConditionalDataset(torch.utils.data.Dataset):
-  def __init__(self, paths):
+  def __init__(self, paths, params):
     super().__init__()
-    self.filenames = []
-    for path in paths:
-      self.filenames += glob(f'{path}/**/*.wav', recursive=True)
+    self.file_index = _build_file_index(paths)
+    self.params = params
 
   def __len__(self):
-    return len(self.filenames)
+    return len(self.file_index)
 
   def __getitem__(self, idx):
-    audio_filename = self.filenames[idx]
+    audio_filename, data_root = self.file_index[idx]
     spec_filename = f'{audio_filename}.spec.npy'
     signal, _ = torchaudio.load(audio_filename)
     spectrogram = np.load(spec_filename)
     return {
         'audio': signal[0],
-        'spectrogram': spectrogram.T
+        'spectrogram': spectrogram.T,
+        'global_condition': _load_global_condition(audio_filename, data_root, self.params),
     }
 
 
 class UnconditionalDataset(torch.utils.data.Dataset):
-  def __init__(self, paths):
+  def __init__(self, paths, params):
     super().__init__()
-    self.filenames = []
-    for path in paths:
-      self.filenames += glob(f'{path}/**/*.wav', recursive=True)
+    self.file_index = _build_file_index(paths)
+    self.params = params
 
   def __len__(self):
-    return len(self.filenames)
+    return len(self.file_index)
 
   def __getitem__(self, idx):
-    audio_filename = self.filenames[idx]
-    spec_filename = f'{audio_filename}.spec.npy'
+    audio_filename, data_root = self.file_index[idx]
     signal, _ = torchaudio.load(audio_filename)
     return {
         'audio': signal[0],
-        'spectrogram': None
+        'spectrogram': None,
+        'global_condition': _load_global_condition(audio_filename, data_root, self.params),
     }
 
 
@@ -101,14 +178,20 @@ class Collator:
 
     audio = np.stack([record['audio'] for record in minibatch if 'audio' in record])
     if self.params.unconditional:
-        return {
-            'audio': torch.from_numpy(audio),
-            'spectrogram': None,
-        }
+      labels = [record['global_condition'] for record in minibatch
+          if 'audio' in record and record.get('global_condition') is not None]
+      return {
+        'audio': torch.from_numpy(audio),
+        'spectrogram': None,
+        'global_condition': torch.from_numpy(np.stack(labels)) if labels else None,
+      }
     spectrogram = np.stack([record['spectrogram'] for record in minibatch if 'spectrogram' in record])
+    labels = [record['global_condition'] for record in minibatch
+          if 'audio' in record and record.get('global_condition') is not None]
     return {
         'audio': torch.from_numpy(audio),
         'spectrogram': torch.from_numpy(spectrogram),
+      'global_condition': torch.from_numpy(np.stack(labels)) if labels else None,
     }
 
   # for gtzan
@@ -138,10 +221,13 @@ class Collator:
 
 
 def from_path(data_dirs, params, is_distributed=False):
+  if params.global_conditioning:
+    file_index = _build_file_index(data_dirs)
+    _infer_global_condition_dim(file_index, params)
   if params.unconditional:
-    dataset = UnconditionalDataset(data_dirs)
+    dataset = UnconditionalDataset(data_dirs, params)
   else:#with condition
-    dataset = ConditionalDataset(data_dirs)
+    dataset = ConditionalDataset(data_dirs, params)
   return torch.utils.data.DataLoader(
       dataset,
       batch_size=params.batch_size,

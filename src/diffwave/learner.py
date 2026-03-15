@@ -121,6 +121,7 @@ class DiffWaveLearner:
 
     audio = features['audio']
     spectrogram = features['spectrogram']
+    global_condition = features.get('global_condition')
 
     N, T = audio.shape
     device = audio.device
@@ -133,7 +134,7 @@ class DiffWaveLearner:
       noise = torch.randn_like(audio)
       noisy_audio = noise_scale_sqrt * audio + (1.0 - noise_scale)**0.5 * noise
 
-      predicted = self.model(noisy_audio, t, spectrogram)
+      predicted = self.model(noisy_audio, t, spectrogram, global_condition)
       loss = self.loss_fn(noise, predicted.squeeze(1))
 
     self.scaler.scale(loss).backward()
