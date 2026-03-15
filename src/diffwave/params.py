@@ -58,5 +58,6 @@ params = AttrDict(
     inference_noise_schedule=[0.0001, 0.001, 0.01, 0.05, 0.2, 0.5],
 
     # unconditional sample len
-    audio_len = 22050*5, # unconditional_synthesis_samples
+    # RIR clips are short; keep this small so batches are not fully filtered out.
+    audio_len = 8192,
 )

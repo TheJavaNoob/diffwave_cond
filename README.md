@@ -134,3 +134,5 @@ python -m diffwave.inference --fast /path/to/model /path/to/spectrogram -o outpu
 - [DiffWave: A Versatile Diffusion Model for Audio Synthesis](https://arxiv.org/pdf/2009.09761.pdf)
 - [Denoising Diffusion Probabilistic Models](https://arxiv.org/pdf/2006.11239.pdf)
 - [Code for Denoising Diffusion Probabilistic Models](https://github.com/hojonathanho/diffusion)
+
+PYTHONPATH=src python -m diffwave model ../empty_room_data/exported_data/splits/train/wav  --global_conditioning_only   --global_conditioning_suffix .npy     --global_conditioning_dir ../empty_room_data/exported_data/splits/train/labels
