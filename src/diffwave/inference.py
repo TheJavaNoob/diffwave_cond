@@ -27,14 +27,20 @@ from diffwave.model import DiffWave
 models = {}
 
 def predict(spectrogram=None, global_condition=None, model_dir=None,
-            params=None, device=torch.device('cuda'), fast_sampling=False):
+            params=None, device=None, fast_sampling=False):
+  if device is None:
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
   # Lazy load model.
   if not model_dir in models:
     if os.path.exists(f'{model_dir}/weights.pt'):
-      checkpoint = torch.load(f'{model_dir}/weights.pt')
+      checkpoint = torch.load(f'{model_dir}/weights.pt', map_location=device)
     else:
-      checkpoint = torch.load(model_dir)
-    model = DiffWave(AttrDict(base_params)).to(device)
+      checkpoint = torch.load(model_dir, map_location=device)
+    model_params = AttrDict(dict(base_params))
+    if 'params' in checkpoint and checkpoint['params'] is not None:
+      model_params.override(checkpoint['params'])
+    model = DiffWave(model_params).to(device)
     model.load_state_dict(checkpoint['model'])
     model.eval()
     models[model_dir] = model
@@ -70,12 +76,14 @@ def predict(spectrogram=None, global_condition=None, model_dir=None,
 
 
     if not model.params.unconditional:
+      if spectrogram is None:
+        raise ValueError('spectrogram is required for locally conditioned models')
       if len(spectrogram.shape) == 2:# Expand rank 2 tensors by adding a batch dimension.
         spectrogram = spectrogram.unsqueeze(0)
       spectrogram = spectrogram.to(device)
       audio = torch.randn(spectrogram.shape[0], model.params.hop_samples * spectrogram.shape[-1], device=device)
     else:
-      audio = torch.randn(1, params.audio_len, device=device)
+      audio = torch.randn(1, model.params.audio_len, device=device)
     noise_scale = torch.from_numpy(alpha_cum**0.5).float().unsqueeze(1).to(device)
     if global_condition is not None:
       if len(global_condition.shape) == 1:
@@ -113,7 +121,7 @@ def main(args):
       global_condition=global_condition,
       model_dir=args.model_dir,
       fast_sampling=args.fast,
-      params=base_params)
+      params=None)
   torchaudio.save(args.output, audio.cpu(), sample_rate=sr)
 
 

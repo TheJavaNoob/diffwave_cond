@@ -109,6 +109,15 @@ Label dimension:
 
 You should expect to hear intelligible (but noisy) speech by ~8k steps (~1.5h on a 2080 Ti).
 
+#### Optional Dev-set evaluation during training
+You can optionally specify a dev set for evaluation during training. Evaluation will run every `eval_interval_steps` training steps (default: once per train epoch) and will compute the average loss across `dev_max_eval_batches` batches from the dev set (default: all batches).
+```
+python -m diffwave /path/to/model/dir /path/to/train/wavs \
+	--dev_data_dirs /path/to/dev/wavs \
+	--eval_interval_steps 1000 \
+	--dev_max_eval_batches 100
+```
+
 #### Multi-GPU training
 By default, this implementation uses as many GPUs in parallel as returned by [`torch.cuda.device_count()`](https://pytorch.org/docs/stable/cuda.html#torch.cuda.device_count). You can specify which GPUs to use by setting the [`CUDA_DEVICES_AVAILABLE`](https://developer.nvidia.com/blog/cuda-pro-tip-control-gpu-visibility-cuda_visible_devices/) environment variable before running the training module.
 

@@ -39,13 +39,26 @@ def _nested_map(struct, map_fn):
 
 
 class DiffWaveLearner:
-  def __init__(self, model_dir, model, dataset, optimizer, params, *args, **kwargs):
+  def __init__(self,
+               model_dir,
+               model,
+               dataset,
+               optimizer,
+               params,
+               dev_dataset=None,
+               eval_interval_steps=None,
+               dev_max_eval_batches=None,
+               *args,
+               **kwargs):
     os.makedirs(model_dir, exist_ok=True)
     self.model_dir = model_dir
     self.model = model
     self.dataset = dataset
+    self.dev_dataset = dev_dataset
     self.optimizer = optimizer
     self.params = params
+    self.eval_interval_steps = eval_interval_steps
+    self.dev_max_eval_batches = dev_max_eval_batches
     self.autocast = torch.cuda.amp.autocast(enabled=kwargs.get('fp16', False))
     self.scaler = torch.cuda.amp.GradScaler(enabled=kwargs.get('fp16', False))
     self.step = 0
@@ -126,6 +139,14 @@ class DiffWaveLearner:
         f.write('step,loss,grad_norm\n')
       f.write(f'{step},{float(loss.detach().cpu().item())},{grad_norm}\n')
 
+  def _append_dev_loss_log(self, step, loss, batches):
+    log_path = os.path.join(self.model_dir, 'dev_loss.csv')
+    write_header = not os.path.exists(log_path)
+    with open(log_path, 'a') as f:
+      if write_header:
+        f.write('step,loss,batches\n')
+      f.write(f'{step},{float(loss)},{int(batches)}\n')
+
   def restore_from_checkpoint(self, filename='weights'):
     try:
       self.restore_from_checkpoint_path(f'{self.model_dir}/{filename}.pt')
@@ -143,6 +164,7 @@ class DiffWaveLearner:
 
   def train(self, max_steps=None):
     device = next(self.model.parameters()).device
+    eval_interval = self.eval_interval_steps or len(self.dataset)
     while True:
       for features in tqdm(self.dataset, desc=f'Epoch {self.step // len(self.dataset)}') if self.is_master else self.dataset:
         if max_steps is not None and self.step >= max_steps:
@@ -155,31 +177,45 @@ class DiffWaveLearner:
           self._append_loss_log(self.step, loss)
           if self.step % 50 == 0:
             self._write_summary(self.step, features, loss)
+            print(f'Step {self.step}, Loss: {loss.item():.4f}, Grad Norm: {self.grad_norm:.4f}')
+          if self.dev_dataset is not None and self.step % eval_interval == 0:
+            dev_loss = self.eval_step()
+            self._append_dev_loss_log(self.step, dev_loss, self._dev_batches)
+            writer = self.summary_writer or SummaryWriter(self.model_dir, purge_step=self.step)
+            writer.add_scalar('dev/loss', dev_loss, self.step)
+            writer.flush()
+            self.summary_writer = writer
+            print(f'Step {self.step}, Dev Loss: {dev_loss:.4f} ({self._dev_batches} batches)')
           if self.step % len(self.dataset) == 0:
             self.save_to_checkpoint()
         self.step += 1
 
-  def train_step(self, features):
-    for param in self.model.parameters():
-      param.grad = None
-
+  def _compute_loss(self, features):
     audio = features['audio']
     spectrogram = features['spectrogram']
     global_condition = features.get('global_condition')
 
     N, T = audio.shape
+    del T
     device = audio.device
     self.noise_level = self.noise_level.to(device)
 
-    with self.autocast:
-      t = torch.randint(0, len(self.params.noise_schedule), [N], device=audio.device)
-      noise_scale = self.noise_level[t].unsqueeze(1)
-      noise_scale_sqrt = noise_scale**0.5
-      noise = torch.randn_like(audio)
-      noisy_audio = noise_scale_sqrt * audio + (1.0 - noise_scale)**0.5 * noise
+    t = torch.randint(0, len(self.params.noise_schedule), [N], device=audio.device)
+    noise_scale = self.noise_level[t].unsqueeze(1)
+    noise_scale_sqrt = noise_scale**0.5
+    noise = torch.randn_like(audio)
+    noisy_audio = noise_scale_sqrt * audio + (1.0 - noise_scale)**0.5 * noise
 
-      predicted = self.model(noisy_audio, t, spectrogram, global_condition)
-      loss = self.loss_fn(noise, predicted.squeeze(1))
+    predicted = self.model(noisy_audio, t, spectrogram, global_condition)
+    loss = self.loss_fn(noise, predicted.squeeze(1))
+    return loss
+
+  def train_step(self, features):
+    for param in self.model.parameters():
+      param.grad = None
+
+    with self.autocast:
+      loss = self._compute_loss(features)
 
     self.scaler.scale(loss).backward()
     self.scaler.unscale_(self.optimizer)
@@ -187,6 +223,37 @@ class DiffWaveLearner:
     self.scaler.step(self.optimizer)
     self.scaler.update()
     return loss
+
+  @torch.no_grad()
+  def eval_step(self):
+    if self.dev_dataset is None:
+      return None
+
+    device = next(self.model.parameters()).device
+    max_batches = self.dev_max_eval_batches
+    losses = []
+    batches = 0
+
+    was_training = self.model.training
+    self.model.eval()
+    iterator = tqdm(self.dev_dataset, desc=f'Dev @ step {self.step}') if self.is_master else self.dev_dataset
+    for features in iterator:
+      if max_batches is not None and batches >= max_batches:
+        break
+      features = _nested_map(features, lambda x: x.to(device) if isinstance(x, torch.Tensor) else x)
+      with self.autocast:
+        loss = self._compute_loss(features)
+      if torch.isnan(loss).any():
+        raise RuntimeError(f'Detected NaN dev loss at step {self.step}.')
+      losses.append(float(loss.detach().cpu().item()))
+      batches += 1
+
+    if was_training:
+      self.model.train()
+    self._dev_batches = batches
+    if not losses:
+      raise RuntimeError('Dev dataloader produced no batches; cannot compute dev loss.')
+    return float(np.mean(losses))
 
   def _write_summary(self, step, features, loss):
     writer = self.summary_writer or SummaryWriter(self.model_dir, purge_step=step)
@@ -199,11 +266,20 @@ class DiffWaveLearner:
     self.summary_writer = writer
 
 
-def _train_impl(replica_id, model, dataset, args, params):
+def _train_impl(replica_id, model, dataset, dev_dataset, args, params):
   torch.backends.cudnn.benchmark = True
   opt = torch.optim.Adam(model.parameters(), lr=params.learning_rate)
 
-  learner = DiffWaveLearner(args.model_dir, model, dataset, opt, params, fp16=args.fp16)
+  learner = DiffWaveLearner(
+      args.model_dir,
+      model,
+      dataset,
+      opt,
+      params,
+      dev_dataset=dev_dataset,
+      eval_interval_steps=args.eval_interval_steps,
+      dev_max_eval_batches=args.dev_max_eval_batches,
+      fp16=args.fp16)
   learner.is_master = (replica_id == 0)
   if args.resume_checkpoint is not None:
     learner.restore_from_checkpoint_path(args.resume_checkpoint)
@@ -218,8 +294,9 @@ def train(args, params):
     dataset = from_gtzan(params)
   else:
     dataset = from_path(args.data_dirs, params)
+  dev_dataset = from_path(args.dev_data_dirs, params) if args.dev_data_dirs else None
   model = DiffWave(params)#.cuda()
-  _train_impl(0, model, dataset, args, params)
+  _train_impl(0, model, dataset, dev_dataset, args, params)
 
 
 def train_distributed(replica_id, replica_count, port, args, params):
@@ -230,8 +307,11 @@ def train_distributed(replica_id, replica_count, port, args, params):
     dataset = from_gtzan(params, is_distributed=True)
   else:
     dataset = from_path(args.data_dirs, params, is_distributed=True)
+  dev_dataset = None
+  if replica_id == 0 and args.dev_data_dirs:
+    dev_dataset = from_path(args.dev_data_dirs, params)
   device = torch.device('cuda', replica_id)
   torch.cuda.set_device(device)
   model = DiffWave(params).to(device)
   model = DistributedDataParallel(model, device_ids=[replica_id])
-  _train_impl(replica_id, model, dataset, args, params)
+  _train_impl(replica_id, model, dataset, dev_dataset, args, params)
