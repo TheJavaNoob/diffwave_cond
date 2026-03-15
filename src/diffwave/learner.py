@@ -17,6 +17,7 @@ import numpy as np
 import os
 import torch
 import torch.nn as nn
+from glob import glob
 
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
@@ -89,14 +90,56 @@ class DiffWaveLearner:
       if os.path.islink(link_name):
         os.unlink(link_name)
       os.symlink(save_basename, link_name)
+    self._delete_old_checkpoints(filename)
+
+  def _delete_old_checkpoints(self, filename='weights'):
+    keep_last = int(getattr(self.params, 'checkpoint_keep_last', 5) or 5)
+    keep_last = max(1, keep_last)
+    pattern = os.path.join(self.model_dir, f'{filename}-*.pt')
+    checkpoints = []
+    for path in glob(pattern):
+      stem = os.path.basename(path)
+      prefix = f'{filename}-'
+      suffix = '.pt'
+      if not (stem.startswith(prefix) and stem.endswith(suffix)):
+        continue
+      step_str = stem[len(prefix):-len(suffix)]
+      if step_str.isdigit():
+        checkpoints.append((int(step_str), path))
+    checkpoints.sort(key=lambda x: x[0])
+    stale = checkpoints[:-keep_last]
+    for _, path in stale:
+      try:
+        os.remove(path)
+      except FileNotFoundError:
+        pass
+
+  def _append_loss_log(self, step, loss):
+    if isinstance(self.grad_norm, torch.Tensor):
+      grad_norm = float(self.grad_norm.detach().cpu().item())
+    else:
+      grad_norm = float(self.grad_norm)
+    log_path = os.path.join(self.model_dir, 'train_loss.csv')
+    write_header = not os.path.exists(log_path)
+    with open(log_path, 'a') as f:
+      if write_header:
+        f.write('step,loss,grad_norm\n')
+      f.write(f'{step},{float(loss.detach().cpu().item())},{grad_norm}\n')
 
   def restore_from_checkpoint(self, filename='weights'):
     try:
-      checkpoint = torch.load(f'{self.model_dir}/{filename}.pt')
-      self.load_state_dict(checkpoint)
+      self.restore_from_checkpoint_path(f'{self.model_dir}/{filename}.pt')
       return True
     except FileNotFoundError:
       return False
+
+  def restore_from_checkpoint_path(self, checkpoint_path):
+    if not os.path.isabs(checkpoint_path):
+      model_relative_path = os.path.join(self.model_dir, checkpoint_path)
+      if os.path.exists(model_relative_path):
+        checkpoint_path = model_relative_path
+    checkpoint = torch.load(checkpoint_path)
+    self.load_state_dict(checkpoint)
 
   def train(self, max_steps=None):
     device = next(self.model.parameters()).device
@@ -109,6 +152,7 @@ class DiffWaveLearner:
         if torch.isnan(loss).any():
           raise RuntimeError(f'Detected NaN loss at step {self.step}.')
         if self.is_master:
+          self._append_loss_log(self.step, loss)
           if self.step % 50 == 0:
             self._write_summary(self.step, features, loss)
           if self.step % len(self.dataset) == 0:
@@ -161,7 +205,11 @@ def _train_impl(replica_id, model, dataset, args, params):
 
   learner = DiffWaveLearner(args.model_dir, model, dataset, opt, params, fp16=args.fp16)
   learner.is_master = (replica_id == 0)
-  learner.restore_from_checkpoint()
+  if args.resume_checkpoint is not None:
+    learner.restore_from_checkpoint_path(args.resume_checkpoint)
+  elif args.resume:
+    if not learner.restore_from_checkpoint():
+      raise FileNotFoundError(f'--resume requested but no checkpoint found at {args.model_dir}/weights.pt')
   learner.train(max_steps=args.max_steps)
 
 
@@ -170,7 +218,7 @@ def train(args, params):
     dataset = from_gtzan(params)
   else:
     dataset = from_path(args.data_dirs, params)
-  model = DiffWave(params).cuda()
+  model = DiffWave(params)#.cuda()
   _train_impl(0, model, dataset, args, params)
 
 

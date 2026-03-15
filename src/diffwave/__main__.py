@@ -61,6 +61,10 @@ if __name__ == '__main__':
       help='space separated list of directories from which to read .wav files for training')
   parser.add_argument('--max_steps', default=None, type=int,
       help='maximum number of training steps')
+  parser.add_argument('--resume', action='store_true', default=False,
+      help='resume training from model_dir/weights.pt')
+  parser.add_argument('--resume_checkpoint', default=None,
+      help='path to a specific checkpoint .pt file to resume from')
   parser.add_argument('--fp16', action='store_true', default=False,
       help='use 16-bit floating point operations for training')
   parser.add_argument('--unconditional', action='store_true', default=False,
