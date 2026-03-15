@@ -139,6 +139,31 @@ audio, sample_rate = diffwave_predict(spectrogram, model_dir, fast_sampling=True
 python -m diffwave.inference --fast /path/to/model /path/to/spectrogram -o output.wav
 ```
 
+### Inference from Global Feature Vectors or Arbitrary Points
+For global-conditioning models, you can run inference either from a precomputed 1-D feature vector or by providing arbitrary source/receiver points.
+
+From a feature `.npy` file:
+```
+python -m diffwave.infer_points /path/to/model_or_weights.pt \
+	--feature_npy /path/to/pair_feature.npy \
+	--output generated.wav \
+	--fast
+```
+
+From arbitrary source/receiver points (feature vector built automatically):
+```
+python -m diffwave.infer_points /path/to/model_or_weights.pt \
+	--source_point 0.10 1.25 1.60 \
+	--receiver_point 3.40 2.10 1.45 \
+	--metadata_path /path/to/exported_data/all_metadata.json \
+	--mesh_path /path/to/empty_room1.stl \
+	--save_feature_npy /path/to/new_pair_feature.npy \
+	--output generated.wav \
+	--fast
+```
+
+If your model also expects local spectrogram conditioning, pass `--spectrogram_path /path/to/input.spec.npy`.
+
 ## References
 - [DiffWave: A Versatile Diffusion Model for Audio Synthesis](https://arxiv.org/pdf/2009.09761.pdf)
 - [Denoising Diffusion Probabilistic Models](https://arxiv.org/pdf/2006.11239.pdf)

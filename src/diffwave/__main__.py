@@ -28,29 +28,34 @@ def _get_free_port():
 
 
 def main(args):
-  unconditional_enabled = args.unconditional or args.global_conditioning_only
-  global_conditioning_enabled = args.global_conditioning or args.global_conditioning_only or \
-      args.global_conditioning_dir is not None or \
-      args.global_condition_dim is not None
-  if args.global_condition_dim is not None and args.global_condition_dim <= 0:
-    raise ValueError(f'global_condition_dim must be > 0, got {args.global_condition_dim}')
+    if args.eval_interval_steps is not None and args.eval_interval_steps <= 0:
+        raise ValueError(f'eval_interval_steps must be > 0, got {args.eval_interval_steps}')
+    if args.dev_max_eval_batches is not None and args.dev_max_eval_batches <= 0:
+        raise ValueError(f'dev_max_eval_batches must be > 0, got {args.dev_max_eval_batches}')
 
-  params.override({
-      'unconditional': unconditional_enabled,
-      'global_conditioning': global_conditioning_enabled,
-      'global_conditioning_dir': args.global_conditioning_dir,
-      'global_conditioning_suffix': args.global_conditioning_suffix,
-      'global_condition_dim': args.global_condition_dim,
-  })
-  replica_count = device_count()
-  if replica_count > 1:
-    if params.batch_size % replica_count != 0:
-      raise ValueError(f'Batch size {params.batch_size} is not evenly divisble by # GPUs {replica_count}.')
-    params.batch_size = params.batch_size // replica_count
-    port = _get_free_port()
-    spawn(train_distributed, args=(replica_count, port, args, params), nprocs=replica_count, join=True)
-  else:
-    train(args, params)
+    unconditional_enabled = args.unconditional or args.global_conditioning_only
+    global_conditioning_enabled = args.global_conditioning or args.global_conditioning_only or \
+        args.global_conditioning_dir is not None or \
+        args.global_condition_dim is not None
+    if args.global_condition_dim is not None and args.global_condition_dim <= 0:
+        raise ValueError(f'global_condition_dim must be > 0, got {args.global_condition_dim}')
+
+    params.override({
+        'unconditional': unconditional_enabled,
+        'global_conditioning': global_conditioning_enabled,
+        'global_conditioning_dir': args.global_conditioning_dir,
+        'global_conditioning_suffix': args.global_conditioning_suffix,
+        'global_condition_dim': args.global_condition_dim,
+    })
+    replica_count = device_count()
+    if replica_count > 1:
+        if params.batch_size % replica_count != 0:
+            raise ValueError(f'Batch size {params.batch_size} is not evenly divisble by # GPUs {replica_count}.')
+            params.batch_size = params.batch_size // replica_count
+            port = _get_free_port()
+            spawn(train_distributed, args=(replica_count, port, args, params), nprocs=replica_count, join=True)
+        else:
+            train(args, params)
 
 
 if __name__ == '__main__':
@@ -59,6 +64,12 @@ if __name__ == '__main__':
       help='directory in which to store model checkpoints and training logs')
   parser.add_argument('data_dirs', nargs='+',
       help='space separated list of directories from which to read .wav files for training')
+  parser.add_argument('--dev_data_dirs', nargs='+', default=None,
+      help='optional space separated list of directories with .wav files for dev-set evaluation')
+  parser.add_argument('--eval_interval_steps', default=None, type=int,
+      help='evaluate on dev set every N training steps (default: once per train epoch)')
+  parser.add_argument('--dev_max_eval_batches', default=None, type=int,
+      help='optional max number of dev batches per evaluation run')
   parser.add_argument('--max_steps', default=None, type=int,
       help='maximum number of training steps')
   parser.add_argument('--resume', action='store_true', default=False,
