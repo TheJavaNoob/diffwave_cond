@@ -28,13 +28,15 @@ def _get_free_port():
 
 
 def main(args):
-  global_conditioning_enabled = args.global_conditioning or \
+  unconditional_enabled = args.unconditional or args.global_conditioning_only
+  global_conditioning_enabled = args.global_conditioning or args.global_conditioning_only or \
       args.global_conditioning_dir is not None or \
       args.global_condition_dim is not None
   if args.global_condition_dim is not None and args.global_condition_dim <= 0:
     raise ValueError(f'global_condition_dim must be > 0, got {args.global_condition_dim}')
 
   params.override({
+      'unconditional': unconditional_enabled,
       'global_conditioning': global_conditioning_enabled,
       'global_conditioning_dir': args.global_conditioning_dir,
       'global_conditioning_suffix': args.global_conditioning_suffix,
@@ -61,6 +63,10 @@ if __name__ == '__main__':
       help='maximum number of training steps')
   parser.add_argument('--fp16', action='store_true', default=False,
       help='use 16-bit floating point operations for training')
+  parser.add_argument('--unconditional', action='store_true', default=False,
+      help='disable local spectrogram conditioning')
+  parser.add_argument('--global_conditioning_only', action='store_true', default=False,
+      help='use only global label conditioning (equivalent to --unconditional --global_conditioning)')
   parser.add_argument('--global_conditioning', action='store_true', default=False,
       help='enable global label conditioning from .npy files')
   parser.add_argument('--global_conditioning_dir', default=None,

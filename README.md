@@ -83,6 +83,22 @@ python -m diffwave /path/to/model/dir /path/to/wavs \
 	--global_conditioning_suffix .label.npy
 ```
 
+Global-conditioning-only training (no spectrogram conditioning):
+
+```
+python -m diffwave /path/to/model/dir /path/to/wavs \
+	--global_conditioning_only \
+	--global_conditioning_suffix .label.npy
+```
+
+Equivalent explicit flags:
+
+```
+python -m diffwave /path/to/model/dir /path/to/wavs \
+	--unconditional \
+	--global_conditioning
+```
+
 File matching rules for each `audio.wav`:
 - Default (same directory as audio): `audio.wav.label.npy` or `audio.label.npy`
 - With `--global_conditioning_dir /path/to/labels`: relative-path and basename fallbacks are both supported.
