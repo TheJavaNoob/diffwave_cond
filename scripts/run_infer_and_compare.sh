@@ -75,12 +75,19 @@ export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 echo "[1/2] Running batch inference from labels..."
 count=0
+skipped_existing=0
 while IFS= read -r -d '' label_file; do
   rel_path="${label_file#$LABELS_DIR/}"
   rel_no_ext="${rel_path%.npy}"
   out_wav="$GEN_WAVS_DIR/${rel_no_ext}.wav"
   out_dir="$(dirname "$out_wav")"
   mkdir -p "$out_dir"
+
+  if [[ -s "$out_wav" ]]; then
+    echo "  - skip existing: $out_wav"
+    skipped_existing=$((skipped_existing + 1))
+    continue
+  fi
 
   echo "  - $(basename "$label_file") -> $out_wav"
   if [[ -n "$FAST_FLAG" ]]; then
@@ -114,4 +121,4 @@ fi
 
 python "${COMPARE_ARGS[@]}"
 
-echo "Done. Generated files: $count"
+echo "Done. Generated files: $count | Skipped existing files: $skipped_existing"
