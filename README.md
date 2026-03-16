@@ -164,6 +164,45 @@ python -m diffwave.infer_points /path/to/model_or_weights.pt \
 
 If your model also expects local spectrogram conditioning, pass `--spectrogram_path /path/to/input.spec.npy`.
 
+### Batch Inference from Label Directory + Metric Report
+If you have a directory of global feature label `.npy` files, you can run inference for all labels and compare generated WAVs against GT WAVs in one step.
+
+Use the helper script:
+
+```bash
+bash scripts/run_infer_and_compare.sh \
+	/path/to/model_or_weights.pt \
+	/path/to/labels_dir \
+	/path/to/gt_wavs_dir \
+	/path/to/generated_wavs_dir
+```
+
+Defaults:
+- inference uses `--fast`
+- labels are scanned recursively (`**/*.npy`)
+- generated WAVs keep the same relative directory and basename as labels
+- metric pairing is by relative path (`--match-mode relative`)
+
+Optional flags:
+
+```bash
+bash scripts/run_infer_and_compare.sh \
+	/path/to/model_or_weights.pt \
+	/path/to/labels_dir \
+	/path/to/gt_wavs_dir \
+	/path/to/generated_wavs_dir \
+	--no-fast \
+	--match-mode basename \
+	--resample-to 22050 \
+	--csv-out /path/to/report.csv
+```
+
+You can also run the comparison directly:
+
+```bash
+python -m diffwave.compare_wavs /path/to/generated_wavs /path/to/gt_wavs --recursive
+```
+
 ## References
 - [DiffWave: A Versatile Diffusion Model for Audio Synthesis](https://arxiv.org/pdf/2009.09761.pdf)
 - [Denoising Diffusion Probabilistic Models](https://arxiv.org/pdf/2006.11239.pdf)
