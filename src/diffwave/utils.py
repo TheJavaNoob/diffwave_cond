@@ -456,7 +456,7 @@ def calculate_c50_error(
 ) -> torch.Tensor:
     """
     Calculate the C50 error (in dB) between the predicted audio and the ground truth audio for a batch of inputs.
-
+    
     Parameters:
         predicted_audio_batch (np.ndarray): Predicted binaural audio, shape (batch_size, 2, N).
         gt_audio_batch (np.ndarray): Ground truth binaural audio, shape (batch_size, 2, N).

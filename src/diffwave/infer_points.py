@@ -30,6 +30,13 @@ def _load_feature(path):
   return np.asarray(feat, dtype=np.float32).reshape(-1)
 
 
+def _load_ground_truth_wav(path):
+  if path is None:
+    return None, None
+  audio, sr = torchaudio.load(path)
+  return audio, sr
+
+
 def _build_pair_feature_from_points(metadata_path, mesh_path, source_point, receiver_point,
                                     source_name, receiver_name, occlusion_list, n1):
   project_root = Path(__file__).resolve().parents[2]
@@ -125,6 +132,7 @@ def main(args):
 
   spectrogram = _load_spectrogram(args.spectrogram_path)
   global_condition = torch.from_numpy(feature).float()
+  ground_truth_audio, ground_truth_sr = _load_ground_truth_wav(args.ground_truth_wav)
 
   audio, sample_rate = predict(
       spectrogram=spectrogram,
@@ -133,6 +141,9 @@ def main(args):
       params=None,
       device=None,
       fast_sampling=args.fast,
+      ground_truth_audio=ground_truth_audio,
+      ground_truth_sample_rate=ground_truth_sr,
+      denoise_plots_dir=args.denoise_plots_dir,
   )
   torchaudio.save(args.output, audio.cpu(), sample_rate=sample_rate)
   print(f'Saved generated audio: {args.output}')
@@ -149,6 +160,10 @@ if __name__ == '__main__':
       help='optional spectrogram .npy path for locally conditioned models')
   parser.add_argument('--fast', '-f', action='store_true',
       help='fast sampling procedure')
+  parser.add_argument('--ground_truth_wav', default=None,
+      help='optional path to a ground-truth wav used for per-step amplitude plots')
+  parser.add_argument('--denoise_plots_dir', default=None,
+      help='optional directory to save ground-truth vs prediction plots for each denoising step')
 
   parser.add_argument('--feature_npy', default=None,
       help='path to a precomputed 1-D feature .npy file')

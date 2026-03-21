@@ -98,7 +98,7 @@ while IFS= read -r -d '' label_file; do
   count=$((count + 1))
 done < <(find "$LABELS_DIR" -type f -name "*.npy" -print0 | sort -z)
 
-if [[ "$count" -eq 0 ]]; then
+if [[ "$count" -eq 0 && "$skipped_existing" -eq 0 ]]; then
   echo "No .npy label files found under: $LABELS_DIR"
   exit 1
 fi
